@@ -381,6 +381,12 @@ struct safe_buffer_list *new_safe_buffer_list(void);
 void safe_buffer_list_free(struct safe_buffer_list *sbl);
 struct safe_buffer_list *safe_buffer_list_append(struct safe_buffer_list *sbl);
 void safe_buffer_list_to_safe_buffer(struct safe_buffer_list *sbl, struct safe_buffer *sb);
+#ifdef _WIN32
+char *strndup(const char *s, size_t n);
+void start_wsa (void);
+void pwinerror (const char *msg, const int errn);
+BOOL is_user_admin (void);
+#endif
 
 /* privsep.c */
 int privsep_interface_curhlim(const char *iface, uint32_t hlim);

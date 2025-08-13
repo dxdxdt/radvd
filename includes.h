@@ -17,21 +17,48 @@
 #include "config.h"
 
 #include <errno.h>
-#include <grp.h>
-#include <netdb.h>
-#include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+#ifdef _WIN32
+
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+#include <iprtrmib.h>
+#include "netinet/icmp6.h"
+#include <netioapi.h>
+#include "syslog.h"
+
+#else
+
+#include <grp.h>
+#include <netdb.h>
+#include <pwd.h>
 #ifndef HAVE_STRLCPY
 #include <bsd/string.h> // strlcpy
 #endif
 #include <syslog.h>
-#include <time.h>
-#include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <netinet/in.h>
+#include <netinet/icmp6.h>
+#include <netinet/ip6.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+
+#endif // _WIN32
+
+#ifndef IFNAMSIZ // Non-portable glibc cruft
+#define IFNAMSIZ IF_NAMESIZE
+#endif
 
 #include <sys/types.h>
 #ifdef HAVE_INTTYPES_H
@@ -60,26 +87,14 @@
 #endif
 #endif
 
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/uio.h>
-
 #include <fcntl.h>
 #include <sys/stat.h>
-
-#include <netinet/in.h>
-
-#include <netinet/icmp6.h>
-#include <netinet/ip6.h>
-
-#include <arpa/inet.h>
+#include <sys/time.h>
 
 #ifdef HAVE_SYSCTL
 #include <sys/sysctl.h>
 #endif
 
-#include <net/if.h>
 
 #ifdef HAVE_NET_IF_DL_H
 #include <net/if_dl.h>

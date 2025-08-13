@@ -3,8 +3,9 @@
  *   Authors:
  *    Lars Fenneberg		<lf@elemental.net>
  *    Marko Myllynen		<myllynen@lut.fi>
+ *    David Timber			<dxdt@dev.snart.me>
  *
- *   This software is Copyright 1996-2000 by the above mentioned author(s),
+ *   This software is Copyright 1996-2025 by the above mentioned author(s),
  *   All Rights Reserved.
  *
  *   The license which is distributed with this software in the file COPYRIGHT
@@ -23,7 +24,12 @@
 #define bswap64(y) (y)
 #endif
 
-static char usage_str[] = "[-vhfe] [-d level]";
+static char usage_str[] =
+	"[-vhfe] [-d level]"
+#ifdef _WIN32
+	"\nenv:\n  RADVDUMP_SCOPE_ID: bind to a specific interface scope id"
+#endif
+;
 
 #ifdef HAVE_GETOPT_LONG
 struct option prog_opt[] = {{"debug", 1, 0, 'd'},   {"file-format", 0, 0, 'f'}, {"exclude-defaults", 0, 0, 'e'},
@@ -82,6 +88,14 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+#ifdef _WIN32
+	if (!is_user_admin()) {
+		flog(LOG_ERR, "Unable to run without admin privileges");
+		exit(1);
+	}
+	start_wsa();
+#endif
+
 	/* get a raw socket for sending and receiving ICMPv6 messages */
 	int sock = open_icmpv6_socket();
 	if (sock < 0) {
@@ -89,13 +103,14 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	dlog(LOG_DEBUG, 4, "socket: %d", sock);
+
 	for (;;) {
 		unsigned char msg[MSG_SIZE_RECV];
 		int hoplimit = 0;
 		struct in6_pktinfo *pkt_info = NULL;
 		struct sockaddr_in6 rcv_addr;
-		unsigned char chdr[CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(int))];
-		int len = recv_rs_ra(sock, msg, &rcv_addr, &pkt_info, &hoplimit, chdr);
+		int len = recv_rs_ra(sock, msg, &rcv_addr, &pkt_info, &hoplimit, NULL);
 		if (len > 0) {
 			struct icmp6_hdr *icmph;
 
@@ -103,23 +118,21 @@ int main(int argc, char *argv[])
 			 * can this happen?
 			 */
 
-			if (len < sizeof(struct icmp6_hdr)) {
+			if (len < (int)sizeof(struct icmp6_hdr)) {
 				flog(LOG_WARNING, "received icmpv6 packet with invalid length: %d", len);
-				exit(1);
+				continue;
 			}
 
 			icmph = (struct icmp6_hdr *)msg;
+			dlog(LOG_DEBUG, 4, "receiver if_index: %u", pkt_info->ipi6_ifindex);
+			dlog(LOG_DEBUG, 4, "type: %u, code: %u", icmph->icmp6_type, icmph->icmp6_code);
 
 			if (icmph->icmp6_type != ND_ROUTER_SOLICIT && icmph->icmp6_type != ND_ROUTER_ADVERT) {
 				/*
 				 *      We just want to listen to RSs and RAs
 				 */
-
-				flog(LOG_ERR, "icmpv6 filter failed");
-				exit(1);
+				continue;
 			}
-
-			dlog(LOG_DEBUG, 4, "receiver if_index: %u", pkt_info->ipi6_ifindex);
 
 			if (icmph->icmp6_type == ND_ROUTER_SOLICIT) {
 				/* not yet */
@@ -127,14 +140,21 @@ int main(int argc, char *argv[])
 				print_ff(msg, len, &rcv_addr, hoplimit, (unsigned int)pkt_info->ipi6_ifindex, edefs);
 		} else if (len == 0) {
 			flog(LOG_ERR, "received zero lenght packet");
-			exit(1);
+			continue;
 		} else {
 			flog(LOG_ERR, "recv_rs_ra: %s", strerror(errno));
-			exit(1);
+			break;
 		}
 	}
 
-	exit(0);
+#ifdef _WIN32
+	closesocket(sock);
+	WSACleanup();
+#else
+	close(sock);
+#endif
+
+	return 1;
 }
 
 static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int hoplimit, unsigned int if_index, int edefs)
@@ -162,10 +182,10 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 		printf("\tAdvOtherConfigFlag %s;\n", (radvert->nd_ra_flags_reserved & ND_RA_FLAG_OTHER) ? "on" : "off");
 
 	if (!edefs || DFLT_AdvReachableTime != ntohl(radvert->nd_ra_reachable))
-		printf("\tAdvReachableTime %u;\n", ntohl(radvert->nd_ra_reachable));
+		printf("\tAdvReachableTime %u;\n", (unsigned)ntohl(radvert->nd_ra_reachable));
 
 	if (!edefs || DFLT_AdvRetransTimer != ntohl(radvert->nd_ra_retransmit))
-		printf("\tAdvRetransTimer %u;\n", ntohl(radvert->nd_ra_retransmit));
+		printf("\tAdvRetransTimer %u;\n", (unsigned)ntohl(radvert->nd_ra_retransmit));
 
 	if (!edefs || DFLT_AdvCurHopLimit != radvert->nd_ra_curhoplimit)
 		printf("\tAdvCurHopLimit %u;\n", radvert->nd_ra_curhoplimit);
@@ -216,7 +236,7 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 			struct nd_opt_mtu *mtu = (struct nd_opt_mtu *)opt_str;
 
 			if (!edefs || DFLT_AdvLinkMTU != ntohl(mtu->nd_opt_mtu_mtu))
-				printf("\tAdvLinkMTU %u;\n", ntohl(mtu->nd_opt_mtu_mtu));
+				printf("\tAdvLinkMTU %u;\n", (unsigned)ntohl(mtu->nd_opt_mtu_mtu));
 			break;
 		}
 		case ND_OPT_SOURCE_LINKADDR:
@@ -270,7 +290,7 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 			secs = ts >> 16;
 			fracs = ts & 0xffff;
 
-			printf("\tAdvTimestamp \"%lu secs, %hu fracs\";\n", secs, fracs);
+			printf("\tAdvTimestamp \"%"PRIu64" secs, %hu fracs\";\n", secs, fracs);
 			break;
 		}
 		case ND_OPT_TARGET_LINKADDR:
@@ -336,14 +356,14 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 					printf("\t\tAdvValidLifetime infinity; # (0xffffffff)\n");
 			} else {
 				if (!edefs || DFLT_AdvValidLifetime != ntohl(pinfo->nd_opt_pi_valid_time))
-					printf("\t\tAdvValidLifetime %u;\n", ntohl(pinfo->nd_opt_pi_valid_time));
+					printf("\t\tAdvValidLifetime %u;\n", (unsigned)ntohl(pinfo->nd_opt_pi_valid_time));
 			}
 			if (ntohl(pinfo->nd_opt_pi_preferred_time) == 0xffffffff) {
 				if (!edefs || DFLT_AdvPreferredLifetime != 0xffffffff)
 					printf("\t\tAdvPreferredLifetime infinity; # (0xffffffff)\n");
 			} else {
 				if (!edefs || DFLT_AdvPreferredLifetime != ntohl(pinfo->nd_opt_pi_preferred_time))
-					printf("\t\tAdvPreferredLifetime %u;\n", ntohl(pinfo->nd_opt_pi_preferred_time));
+					printf("\t\tAdvPreferredLifetime %u;\n", (unsigned)ntohl(pinfo->nd_opt_pi_preferred_time));
 			}
 
 			if (!edefs ||
@@ -392,7 +412,7 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 			if (ntohl(rinfo->nd_opt_ri_lifetime) == 0xffffffff)
 				printf("\t\tAdvRouteLifetime infinity; # (0xffffffff)\n");
 			else
-				printf("\t\tAdvRouteLifetime %u;\n", ntohl(rinfo->nd_opt_ri_lifetime));
+				printf("\t\tAdvRouteLifetime %u;\n", (unsigned)ntohl(rinfo->nd_opt_ri_lifetime));
 
 			printf("\t}; # End of route definition\n\n");
 			break;
@@ -412,7 +432,7 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 				if (ntohl(rdnss_info->nd_opt_rdnssi_lifetime) == 0xffffffff)
 					printf("\t\tAdvRDNSSLifetime infinity; # (0xffffffff)\n");
 				else
-					printf("\t\tAdvRDNSSLifetime %u;\n", ntohl(rdnss_info->nd_opt_rdnssi_lifetime));
+					printf("\t\tAdvRDNSSLifetime %u;\n", (unsigned)ntohl(rdnss_info->nd_opt_rdnssi_lifetime));
 				printf("\t}; # End of RDNSS definition\n\n");
 			} else {
 				flog(LOG_ERR, "Invalid RDNSS option length %d from %s", rdnss_info->nd_opt_rdnssi_len, addr_str);
@@ -444,7 +464,7 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 					continue;
 				}
 
-				if ((sizeof(suffix) - strlen(suffix)) < (label_len + 2)) {
+				if ((sizeof(suffix) - strlen(suffix)) < (unsigned)(label_len + 2)) {
 					flog(LOG_ERR, "oversized suffix in DNSSL option from %s", addr_str);
 					break;
 				}
@@ -460,7 +480,7 @@ static void print_ff(unsigned char *msg, int len, struct sockaddr_in6 *addr, int
 			if (ntohl(dnssl_info->nd_opt_dnssli_lifetime) == 0xffffffff)
 				printf("\t\tAdvDNSSLLifetime infinity; # (0xffffffff)\n");
 			else
-				printf("\t\tAdvDNSSLLifetime %u;\n", ntohl(dnssl_info->nd_opt_dnssli_lifetime));
+				printf("\t\tAdvDNSSLLifetime %u;\n", (unsigned)ntohl(dnssl_info->nd_opt_dnssli_lifetime));
 
 			printf("\t}; # End of DNSSL definition\n\n");
 			break;

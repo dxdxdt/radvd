@@ -2,8 +2,9 @@
  *
  *   Authors:
  *    Lars Fenneberg		<lf@elemental.net>
+ *    David Timber			<dxdt@dev.snart.me>
  *
- *   This software is Copyright 1996,1997 by the above mentioned author(s),
+ *   This software is Copyright 1996-2025 by the above mentioned author(s),
  *   All Rights Reserved.
  *
  *   The license which is distributed with this software in the file COPYRIGHT
@@ -138,6 +139,112 @@ void safe_buffer_list_to_safe_buffer(struct safe_buffer_list *sbl, struct safe_b
 	}
 }
 
+#ifdef _WIN32
+
+/**
+ * strndup() polyfill for Windows
+ */
+char *strndup(const char *s, size_t n) {
+	const size_t real_l = strnlen(s, n);
+	const size_t to_alloc = (real_l > n ? real_l : n) + 1;
+	char *ret = malloc(to_alloc);
+
+	if (ret != NULL) {
+		memcpy(ret, s, to_alloc);
+	}
+
+	return ret;
+}
+
+/**
+ * Calls WSAStartup() (with the default params that have been stuck for decades)
+ */
+void start_wsa (void) {
+	int fr;
+	WSADATA wsaData = {0};
+
+	fr = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (fr != 0) {
+		pwinerror("WSAStartup()", WSAGetLastError());
+		abort();
+	}
+}
+
+static void rm_trailing_ws (char *s) {
+	const size_t l = strlen(s);
+
+	for (size_t i = 0; i < l; i += 1) {
+		if (isspace(s[l - 1])) {
+			s[l - 1] = 0;
+		}
+		else {
+			break;
+		}
+	}
+}
+
+/**
+ * Print string representing WinAPI "System Error Code", perror() style
+ *
+ * @param msg the preface message
+ */
+void pwinerror (const char *msg, const int errn) {
+	char *buf = NULL;
+
+	FormatMessage(
+		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+		NULL,
+		errn,
+		0,
+		(LPSTR)&buf,
+		0,
+		NULL);
+
+	rm_trailing_ws(buf);
+	if (msg == NULL) {
+		flog(LOG_ERR, "%s: %d %s", msg, errn, buf);
+	}
+	else {
+		flog(LOG_ERR, "%d %s", errn, buf);
+	}
+
+	LocalFree(buf);
+}
+
+/**
+ * This routine returns TRUE if the caller's process is a member of the
+ * Administrators local group. Caller is NOT expected to be impersonating anyone
+ * and is expected to be able to open its own process and process token.
+ *
+ * from https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-checktokenmembership
+ *
+ * @return TRUE if caller has Administrators local group
+ * @return FALSE otherwise
+ */
+BOOL is_user_admin (void) {
+	BOOL b;
+	SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+	PSID AdministratorsGroup;
+
+	b = AllocateAndInitializeSid(
+		&NtAuthority,
+		2,
+		SECURITY_BUILTIN_DOMAIN_RID,
+		DOMAIN_ALIAS_RID_ADMINS,
+		0, 0, 0, 0, 0, 0,
+		&AdministratorsGroup);
+	if (b) {
+		if (!CheckTokenMembership(NULL, AdministratorsGroup, &b)) {
+			b = FALSE;
+		}
+		FreeSid(AdministratorsGroup);
+	}
+
+	return b;
+}
+
+#endif
+
 /**
  * Free all memory used by a safe_buffer_list
  *
@@ -155,6 +262,23 @@ void safe_buffer_list_free(struct safe_buffer_list *sbl)
 		free(current);
 	}
 }
+
+#ifndef vasprintf
+static int vasprintf (char **strp, const char *format, va_list va) {
+	const int ret = vsnprintf(NULL, 0, format, va);
+
+	if (ret >= 0) {
+		const size_t size = (size_t)ret + 1;
+		*strp = calloc(size, 1);
+		if (*strp == NULL) {
+			return -1;
+		}
+		vsnprintf(*strp, size, format, va);
+	}
+
+	return ret;
+}
+#endif
 
 __attribute__((format(printf, 1, 2))) char *strdupf(char const *format, ...)
 {
