@@ -1,0 +1,34 @@
+name: Build Windows
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mingw:
+    strategy:
+      matrix:
+        arch: [i686, x86_64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install compiler
+        run: |
+          apt-get update -y
+          apt-get install -y gcc-mingw-w64-i686 gcc-mingw-w64-x86-64
+      - name: Build
+        env:
+          CC: ${{ matrix.arch }}-w64-mingw32-gcc
+        run: |
+          make -f Makefile.win32
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: radvdump-${{ matrix.arch }}
+          path: radvdump.exe

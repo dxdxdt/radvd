@@ -44,8 +44,6 @@ radvdump_LDFLAGS = \
 	-lws2_32 \
 	-liphlpapi
 
-CC = x86_64-w64-mingw32-gcc
-
 radvdump.exe: $(radvdump_SOURCES) $(radvdump_HEADERS)
 	$(CC) $(CFLAGS) -o radvdump.exe $(radvdump_SOURCES) $(radvdump_LDFLAGS)
 
