@@ -185,7 +185,7 @@ int open_icmpv6_socket(void) {
 		return -1;
 	}
 
-	if (nb_ifaces > 0 && scopeid == 0) {
+	if (nb_ifaces > 1 && scopeid == 0) {
 /*
  * TODO: Unlike POSIX/BSD sockets, Winsock raw sockets must be bound to an
  * interface before they can be used
